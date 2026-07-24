@@ -1,3 +1,3 @@
-TIMESTAMP = 1783938498
-SHA256 (opnsense-update-26.7_GH0.tar.gz) = 97bf1b102772898cb5bda81a4182ff2991c17167b62f650e3a51016f8e9c6a03
-SIZE (opnsense-update-26.7_GH0.tar.gz) = 30458
+TIMESTAMP = 1784923824
+SHA256 (biptec-opnsense-update-26.7-1460fe3f3aa962dfd948d44dbcfffd6528fa4532_GH0.tar.gz) = c9a73a16071c885b7e7c91ac1ecd5ef42cbd7c5dde74c125e4d6e68f1666da86
+SIZE (biptec-opnsense-update-26.7-1460fe3f3aa962dfd948d44dbcfffd6528fa4532_GH0.tar.gz) = 30597
