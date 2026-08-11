@@ -1,0 +1,10 @@
+--- pyproject.toml.orig
++++ pyproject.toml
+@@ -3,7 +3,7 @@
+     "setuptools; python_version != '3.3'",
+     "setuptools<40.0; python_version == '3.3'",
+     "wheel",
+-    "setuptools_scm<8.0"
++    "setuptools_scm<10.0"
+ ]
+ build-backend = "setuptools.build_meta"
