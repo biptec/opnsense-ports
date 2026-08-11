@@ -1,40 +1,21 @@
---- salt/minion.py.orig	2026-06-11 12:00:21.000000000 +0000
-+++ salt/minion.py	2026-08-11 13:16:02.778395000 +0000
-@@ -162,6 +162,10 @@
- # 6. Handle publications
-
-
+--- salt/minion.py.orig
++++ salt/minion.py
+@@ -164,0 +165,4 @@
 +class _SourceInterfaceUnavailable(SystemExit):
 +    """Abort startup when the configured source interface is unusable."""
 +
 +
- def resolve_dns(opts, fallback=True):
-     """
-     Resolves the master_ip and master_uri options
-@@ -243,25 +247,27 @@
-         interfaces = salt.utils.network.interfaces()
-         log.trace("The following interfaces are available on this Minion:")
-         log.trace(interfaces)
--        if opts["source_interface_name"] in interfaces:
--            if interfaces[opts["source_interface_name"]]["up"]:
--                addrs = (
--                    interfaces[opts["source_interface_name"]]["inet"]
--                    if not opts["ipv6"]
--                    else interfaces[opts["source_interface_name"]]["inet6"]
--                )
--                ret["source_ip"] = addrs[0]["address"]
--                log.debug("Using %s as source IP address", ret["source_ip"])
--            else:
--                log.warning(
--                    "The interface %s is down so it cannot be used as source to connect"
--                    " to the Master",
--                    opts["source_interface_name"],
--                )
--        else:
--            log.warning(
--                "%s is not a valid interface. Ignoring.", opts["source_interface_name"]
--            )
-+        source_interface = opts["source_interface_name"]
+@@ -177 +181,44 @@
+-    if check_dns is True:
++    source_interface = opts["source_interface_name"]
++    if check_dns and source_interface:
++        # source_interface_name is a security boundary on managed network nodes.
++        # Validate it before any master DNS lookup or connectivity probe: upstream
++        # dns_check() opens an unbound test socket before source_ip is applied.
++        log.trace("Custom source interface required: %s", source_interface)
++        interfaces = salt.utils.network.interfaces()
++        log.trace("The following interfaces are available on this Minion:")
++        log.trace(interfaces)
 +        if source_interface not in interfaces:
 +            err = f"Configured source interface {source_interface} is not available"
 +            log.error(err)
@@ -55,25 +36,55 @@
 +            raise _SourceInterfaceUnavailable(42)
 +        ret["source_ip"] = addrs[0]["address"]
 +        log.debug("Using %s as source IP address", ret["source_ip"])
-     elif opts["source_address"]:
-         ret["source_ip"] = salt.utils.network.dns_check(
-             opts["source_address"], int(opts["source_ret_port"]), True, opts["ipv6"]
-@@ -1341,6 +1347,11 @@
-                     await minion.connect_master(failed=failed)
-                 minion.tune_in(start=False)
-                 self.minions.append(minion)
-+                break
++
++        # A hostname would require an unbound system resolver query.  A literal
++        # master address keeps startup network-silent until Salt opens the real
++        # transport socket, which is then bound to source_ip above.
++        try:
++            master_address = ipaddress.ip_address(opts["master"])
++        except ValueError:
++            err = (
++                "Configured master must be a literal IP address when "
++                "source_interface_name is set"
++            )
++            log.error(err)
++            raise _SourceInterfaceUnavailable(42)
++        ret["master_ip"] = salt.utils.network.ip_bracket(str(master_address))
++    elif check_dns is True:
+@@ -241,25 +288 @@
+-    if opts["source_interface_name"]:
+-        log.trace("Custom source interface required: %s", opts["source_interface_name"])
+-        interfaces = salt.utils.network.interfaces()
+-        log.trace("The following interfaces are available on this Minion:")
+-        log.trace(interfaces)
+-        if opts["source_interface_name"] in interfaces:
+-            if interfaces[opts["source_interface_name"]]["up"]:
+-                addrs = (
+-                    interfaces[opts["source_interface_name"]]["inet"]
+-                    if not opts["ipv6"]
+-                    else interfaces[opts["source_interface_name"]]["inet6"]
+-                )
+-                ret["source_ip"] = addrs[0]["address"]
+-                log.debug("Using %s as source IP address", ret["source_ip"])
+-            else:
+-                log.warning(
+-                    "The interface %s is down so it cannot be used as source to connect"
+-                    " to the Master",
+-                    opts["source_interface_name"],
+-                )
+-        else:
+-            log.warning(
+-                "%s is not a valid interface. Ignoring.", opts["source_interface_name"]
+-            )
+-    elif opts["source_address"]:
++    if not source_interface and opts["source_address"]:
+@@ -1344,0 +1368,5 @@
 +            except _SourceInterfaceUnavailable as exc:
 +                minion.destroy()
 +                self._source_interface_exit_code = exc.code
 +                self.io_loop.stop()
-                 break
-             except SaltClientError as exc:
-                 minion.destroy()
-@@ -1396,7 +1407,23 @@
-         except (KeyboardInterrupt, SystemExit):
-             pass
-         finally:
++                break
+@@ -1398,0 +1427,14 @@
 +            source_interface_exit_code = getattr(self, "_source_interface_exit_code", None)
 +            if source_interface_exit_code is not None:
 +                self.destroy()
@@ -88,9 +99,6 @@
 +                    self.io_loop.run_until_complete(
 +                        asyncio.gather(*pending_tasks, return_exceptions=True)
 +                    )
-             self.io_loop.close()
+@@ -1399,0 +1442,2 @@
 +        if source_interface_exit_code is not None:
 +            raise SystemExit(source_interface_exit_code)
-
-     @property
-     def restart(self):
