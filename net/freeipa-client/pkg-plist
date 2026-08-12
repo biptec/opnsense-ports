@@ -322,6 +322,10 @@ etc/ipa/epn/expire_msg.template
 %%PYTHON_SITELIBDIR%%/ipaplatform/fedora_container/services.py
 %%PYTHON_SITELIBDIR%%/ipaplatform/fedora_container/tasks.py
 %%PYTHON_SITELIBDIR%%/ipaplatform/freebsd/__init__.py
+%%PYTHON_SITELIBDIR%%/ipaplatform/freebsd/constants.py
+%%PYTHON_SITELIBDIR%%/ipaplatform/freebsd/paths.py
+%%PYTHON_SITELIBDIR%%/ipaplatform/freebsd/services.py
+%%PYTHON_SITELIBDIR%%/ipaplatform/freebsd/tasks.py
 %%PYTHON_SITELIBDIR%%/ipaplatform/install_files.txt
 %%PYTHON_SITELIBDIR%%/ipaplatform/nixos/__init__.py
 %%PYTHON_SITELIBDIR%%/ipaplatform/nixos/constants.py
