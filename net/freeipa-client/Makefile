@@ -1,5 +1,6 @@
 PORTNAME=	freeipa-client
 DISTVERSION=	4.13.1
+PORTREVISION=	1
 CATEGORIES=	net
 MASTER_SITES=	https://releases.pagure.org/freeipa/
 DISTNAME=	freeipa-${DISTVERSION}
@@ -13,6 +14,24 @@ LICENSE_FILE=	${WRKSRC}/COPYING
 
 BUILD_DEPENDS=	${PY_SETUPTOOLS} \
 		${PYTHON_PKGNAMEPREFIX}pip>0:devel/py-pip@${PY_FLAVOR}
+
+RUN_DEPENDS=	certmonger>0:security/certmonger \
+		sssd2>=2.13.1:security/sssd2 \
+		${PYTHON_PKGNAMEPREFIX}cffi>0:devel/py-cffi@${PY_FLAVOR} \
+		${PYTHON_PKGNAMEPREFIX}cryptography>0:security/py-cryptography@${PY_FLAVOR} \
+		${PYTHON_PKGNAMEPREFIX}dbus>0:devel/py-dbus@${PY_FLAVOR} \
+		${PYTHON_PKGNAMEPREFIX}dnspython>0:dns/py-dnspython@${PY_FLAVOR} \
+		${PYTHON_PKGNAMEPREFIX}gssapi>0:security/py-gssapi@${PY_FLAVOR} \
+		${PYTHON_PKGNAMEPREFIX}ifaddr>0:net/py-ifaddr@${PY_FLAVOR} \
+		${PYTHON_PKGNAMEPREFIX}netaddr>0:net/py-netaddr@${PY_FLAVOR} \
+		${PYTHON_PKGNAMEPREFIX}packaging>0:devel/py-packaging@${PY_FLAVOR} \
+		${PYTHON_PKGNAMEPREFIX}pyasn1>0:devel/py-pyasn1@${PY_FLAVOR} \
+		${PYTHON_PKGNAMEPREFIX}pyasn1-modules>0:devel/py-pyasn1-modules@${PY_FLAVOR} \
+		${PYTHON_PKGNAMEPREFIX}python-augeas>0:textproc/py-python-augeas@${PY_FLAVOR} \
+		${PYTHON_PKGNAMEPREFIX}python-ldap>0:net/py-python-ldap@${PY_FLAVOR} \
+		${PYTHON_PKGNAMEPREFIX}qrcode>0:textproc/py-qrcode@${PY_FLAVOR} \
+		${PYTHON_PKGNAMEPREFIX}six>0:devel/py-six@${PY_FLAVOR} \
+		${PYTHON_PKGNAMEPREFIX}urllib3>0:net/py-urllib3@${PY_FLAVOR}
 
 LIB_DEPENDS=	libcmocka.so:sysutils/cmocka \
 		libcurl.so:ftp/curl \
@@ -52,6 +71,9 @@ post-install:
 	@${MV} ${STAGEDIR}${PREFIX}/etc/ipa/epn.conf ${STAGEDIR}${PREFIX}/etc/ipa/epn.conf.sample
 
 post-stage:
+.for _module in constants paths services tasks
+	@test -f ${STAGEDIR}${PYTHONPREFIX_SITELIBDIR}/ipaplatform/freebsd/${_module}.py
+.endfor
 	${REINPLACE_CMD} -e 's|${STAGEDIR}||'   \
 		${STAGEDIR}${PYTHONPREFIX_SITELIBDIR}/ipaclient/install_files.txt
 	${REINPLACE_CMD} -e 's|${STAGEDIR}||'   \

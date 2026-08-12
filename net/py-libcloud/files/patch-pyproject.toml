@@ -1,0 +1,11 @@
+--- pyproject.toml.orig
++++ pyproject.toml
+@@ -17,8 +17,8 @@
+ [build-system]
+ requires = [
+-    "setuptools>=75.3,<80.11",
+-    "wheel~=0.45.1"
++    "setuptools>=63.1,<80.11",
++    "wheel>=0.45.1"
+ ]
+ build-backend = "setuptools.build_meta"
