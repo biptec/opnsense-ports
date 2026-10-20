@@ -6,6 +6,7 @@ CATEGORIES=	net
 PKGNAMESUFFIX=	10-pythontools
 .else
 PKGNAMESUFFIX=	10
+PORTREVISION=	2
 .endif
 
 MAINTAINER=	olivier@FreeBSD.org
