@@ -28,6 +28,8 @@ def run(*args: str, check: bool = True) -> subprocess.CompletedProcess:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--suite', choices=('single', 'multipath', 'linklocal'), default='single')
+    parser.add_argument('--zebra', default='/usr/local/sbin/zebra',
+                        help='Native Zebra executable to test (including an uninstalled build)')
     args = parser.parse_args()
     if os.geteuid() != 0 or run('sysctl', '-n', 'security.jail.jailed').stdout.strip() != '1':
         raise RuntimeError('Requires root in a disposable empty VNET jail')
@@ -120,7 +122,7 @@ def main() -> None:
             run('ifconfig', device, 'inet6', 'fe80::1/64')
         # A daemon may retain its startup descriptors; do not wait for pipe EOF.
         with (work/'startup.log').open('w') as startup:
-            subprocess.run(['/usr/local/sbin/zebra', '-d', '-P', '0', '-f', str(config),
+            subprocess.run([args.zebra, '-d', '-P', '0', '-f', str(config),
                             '-i', str(work/'zebra.pid'), '-z', str(work/'zserv.api'),
                             '--vty_socket', str(work)], stdout=startup,
                            stderr=subprocess.STDOUT, check=True)
