@@ -1,0 +1,48 @@
+--- zebra/if_sysctl.c.orig
++++ zebra/if_sysctl.c
+@@ -106,9 +106,25 @@
+ 		flog_err_sys(EC_ZEBRA_IFLIST_FAILED,
+ 			     "Could not enumerate interfaces: %s",
+ 			     safe_strerror(errno));
++		XFREE(MTYPE_TMP, ref);
+ 		return;
+ 	}
+ 
++	/*
++	 * FreeBSD's classic NET_RT_IFLIST enumerates configured CARP BACKUP
++	 * addresses as RTM_NEWADDR. Build a one-time ownership snapshot before
++	 * parsing it so ifam_read() ignores only non-owner CARP addresses.
++	 * Live routing-socket processing is unaffected.
++	 */
++#ifdef __FreeBSD__
++	if (!carp_startup_filter_begin()) {
++		zlog_err("%s: unable to establish CARP startup ownership snapshot",
++			 __func__);
++		XFREE(MTYPE_TMP, ref);
++		frr_exit_with_buffer_flush(EXIT_FAILURE);
++	}
++#endif
++
+ 	/* Parse both interfaces and addresses. */
+ 	for (end = buf + bufsiz; buf < end; buf += ifm->ifm_msglen) {
+ 		ifm = (struct if_msghdr *)buf;
+@@ -122,12 +138,19 @@
+ 			break;
+ 		default:
+ 			zlog_info("%s: unexpected message type", __func__);
++#ifdef __FreeBSD__
++			carp_startup_filter_end();
++#endif
+ 			XFREE(MTYPE_TMP, ref);
+ 			return;
+ 			break;
+ 		}
+ 	}
+ 
++#ifdef __FreeBSD__
++	carp_startup_filter_end();
++#endif
++
+ 	/* Free sysctl buffer. */
+ 	XFREE(MTYPE_TMP, ref);
+ 

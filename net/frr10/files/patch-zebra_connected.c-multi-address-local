@@ -1,0 +1,39 @@
+--- zebra/connected.c.orig
++++ zebra/connected.c
+@@ -323,10 +323,15 @@
+ 			count++;
+ 
+ 		if (count >= 2)
+-			return;
++			break;
+ 	}
+ 
+-	if (!CHECK_FLAG(ifc->flags, ZEBRA_IFA_NOPREFIXROUTE)) {
++	/*
++	 * Multiple addresses can share one connected prefix, but each address
++	 * still owns an independent local host route.  Deduplicate only the
++	 * shared connected route; do not skip the local route for this address.
++	 */
++	if (count < 2 && !CHECK_FLAG(ifc->flags, ZEBRA_IFA_NOPREFIXROUTE)) {
+ 		connected_remove_kernel_for_connected(afi, SAFI_UNICAST, zvrf, &p, &nh);
+ 
+ 		rib_add(afi, SAFI_UNICAST, zvrf->vrf->vrf_id, ZEBRA_ROUTE_CONNECT, 0, flags, &p,
+@@ -520,14 +525,14 @@
+ 			count++;
+ 
+ 		if (count >= 1)
+-			return;
++			break;
+ 	}
+ 
+ 	/*
+-	 * Same logic as for connected_up(): push the changes into the
+-	 * head.
++	 * Keep the shared connected prefix while another active address still
++	 * owns it, but always withdraw the local host route for this address.
+ 	 */
+-	if (!CHECK_FLAG(ifc->flags, ZEBRA_IFA_NOPREFIXROUTE)) {
++	if (count == 0 && !CHECK_FLAG(ifc->flags, ZEBRA_IFA_NOPREFIXROUTE)) {
+ 		rib_delete(afi, SAFI_UNICAST, zvrf->vrf->vrf_id,
+ 			   ZEBRA_ROUTE_CONNECT, 0, 0, &p, NULL, &nh, 0,
+ 			   zvrf->table_id, 0, 0, false);

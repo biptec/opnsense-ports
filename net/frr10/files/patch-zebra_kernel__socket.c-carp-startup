@@ -1,0 +1,363 @@
+--- zebra/kernel_socket.c.orig
++++ zebra/kernel_socket.c
+@@ -10,6 +10,36 @@
+ #ifndef HAVE_NETLINK
+ 
+ #include <net/if_types.h>
++#ifdef __FreeBSD__
++#include <sys/ioctl.h>
++#include <sys/socket.h>
++
++#include <net/if.h>
++
++#include <netinet/ip_carp.h>
++
++/*
++ * FreeBSD Route Netlink and classic PF_ROUTE expose overlapping RTM_/RTA_
++ * macro names with different numeric ABIs (notably RTM_NEWADDR/DELADDR and
++ * RTA_GATEWAY).  This translation unit otherwise parses PF_ROUTE, so keep the
++ * Netlink aliases scoped to the headers that need them.  The startup snapshot
++ * uses NL_RTM_* names explicitly after the classic namespace is restored.
++ */
++#pragma push_macro("RTM_NEWADDR")
++#pragma push_macro("RTM_DELADDR")
++#pragma push_macro("RTA_DST")
++#pragma push_macro("RTA_GATEWAY")
++#pragma push_macro("RTA_SRC")
++#include <netlink/netlink.h>
++#include <netlink/netlink_snl.h>
++#include <netlink/netlink_snl_route.h>
++#include <netlink/netlink_snl_route_parsers.h>
++#pragma pop_macro("RTA_SRC")
++#pragma pop_macro("RTA_GATEWAY")
++#pragma pop_macro("RTA_DST")
++#pragma pop_macro("RTM_DELADDR")
++#pragma pop_macro("RTM_NEWADDR")
++#endif
+ #ifdef __OpenBSD__
+ #include <netmpls/mpls.h>
+ #endif
+@@ -39,6 +69,231 @@
+ 
+ extern struct zebra_privs_t zserv_privs;
+ 
++#ifdef __FreeBSD__
++/*
++ * FreeBSD keeps CARP BACKUP/INIT addresses configured, but they are not
++ * forwarding owners.  The live routing socket receives ownership RTM_NEWADDR
++ * and RTM_DELADDR notifications from carp(4).  NET_RT_IFLIST, however,
++ * enumerates every configured address during Zebra startup and therefore needs
++ * a one-time ownership filter so a fresh Zebra does not synthesize connected
++ * and local routes for standby CARP addresses.
++ *
++ * This snapshot is deliberately startup-only.  It uses FreeBSD route Netlink
++ * solely to map each configured address to its VHID, and SIOCGVH to obtain the
++ * current CARP state.  Runtime ownership remains driven by the existing routing
++ * socket; there is no CARP poller or devd consumer in Zebra.
++ */
++struct carp_startup_nonowner {
++	ifindex_t ifindex;
++	sa_family_t family;
++	union {
++		struct in_addr v4;
++		struct in6_addr v6;
++	} addr;
++};
++
++static struct carp_startup_nonowner *carp_startup_nonowners;
++static size_t carp_startup_nonowner_count;
++static bool carp_startup_filter_active;
++
++static int
++carp_startup_state(int sock, ifindex_t ifindex, uint32_t vhid)
++{
++	struct carpreq carpr = {
++		.carpr_count = 1,
++		.carpr_vhid = (int)vhid,
++	};
++	struct ifreq ifr = {};
++	char ifname[IFNAMSIZ];
++
++	if (if_indextoname(ifindex, ifname) == NULL)
++		return -1;
++
++	strlcpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
++	ifr.ifr_data = (caddr_t)&carpr;
++	if (ioctl(sock, SIOCGVH, &ifr) != 0)
++		return -1;
++
++	return carpr.carpr_state;
++}
++
++static bool
++carp_startup_store_nonowner(const struct snl_parsed_addr *parsed)
++{
++	const struct sockaddr *sa;
++	struct carp_startup_nonowner *entry;
++
++	sa = parsed->ifa_local != NULL ? parsed->ifa_local : parsed->ifa_address;
++	if (sa == NULL || (sa->sa_family != AF_INET && sa->sa_family != AF_INET6))
++		return true;
++
++	carp_startup_nonowners =
++		XREALLOC(MTYPE_TMP, carp_startup_nonowners,
++			 (carp_startup_nonowner_count + 1) *
++				 sizeof(*carp_startup_nonowners));
++	entry = &carp_startup_nonowners[carp_startup_nonowner_count++];
++	memset(entry, 0, sizeof(*entry));
++	entry->ifindex = parsed->ifa_index;
++	entry->family = sa->sa_family;
++
++	if (sa->sa_family == AF_INET)
++		entry->addr.v4 = ((const struct sockaddr_in *)sa)->sin_addr;
++	else {
++		entry->addr.v6 = ((const struct sockaddr_in6 *)sa)->sin6_addr;
++		/*
++		 * Match the classic routing-socket normalization used below:
++		 * the interface scope belongs to the ifindex, not the address
++		 * bytes.
++		 */
++		if (IN6_IS_ADDR_LINKLOCAL(&entry->addr.v6)) {
++			entry->addr.v6.s6_addr[2] = 0;
++			entry->addr.v6.s6_addr[3] = 0;
++		}
++	}
++
++	return true;
++}
++
++bool
++carp_startup_filter_begin(void)
++{
++	struct snl_errmsg_data e = {};
++	struct snl_state ss = {};
++	struct snl_writer nw;
++	struct nlmsghdr *hdr;
++	uint32_t seq_id;
++	int state_sock = -1;
++	bool snl_ready = false;
++	bool ok = false;
++
++	carp_startup_filter_end();
++
++	if (!snl_init(&ss, NETLINK_ROUTE)) {
++		zlog_err("%s: unable to open FreeBSD route Netlink", __func__);
++		goto out;
++	}
++	snl_ready = true;
++
++	state_sock = socket(AF_INET, SOCK_DGRAM, 0);
++	if (state_sock < 0) {
++		zlog_err("%s: unable to open CARP state socket: %s", __func__,
++			 safe_strerror(errno));
++		goto out;
++	}
++
++	snl_init_writer(&ss, &nw);
++	hdr = snl_create_msg_request(&nw, NL_RTM_GETADDR);
++	if (hdr == NULL) {
++		zlog_err("%s: unable to create RTM_GETADDR request", __func__);
++		goto out;
++	}
++	hdr->nlmsg_flags |= NLM_F_DUMP;
++	if (snl_reserve_msg_object(&nw, struct ifaddrmsg) == NULL) {
++		zlog_err("%s: unable to reserve RTM_GETADDR payload", __func__);
++		goto out;
++	}
++	hdr = snl_finalize_msg(&nw);
++	if (hdr == NULL || !snl_send_message(&ss, hdr)) {
++		zlog_err("%s: unable to send RTM_GETADDR request", __func__);
++		goto out;
++	}
++
++	seq_id = hdr->nlmsg_seq;
++	while ((hdr = snl_read_reply_multi(&ss, seq_id, &e)) != NULL) {
++		struct snl_parsed_addr parsed = {};
++		int state;
++
++		if (!snl_parse_nlmsg(&ss, hdr, &snl_rtm_addr_parser, &parsed))
++			continue;
++		if (parsed.ifaf_vhid == 0)
++			continue;
++
++		state = carp_startup_state(state_sock, parsed.ifa_index,
++					   parsed.ifaf_vhid);
++		if (state < 0) {
++			char ifname[IFNAMSIZ] = "?";
++
++			(void)if_indextoname(parsed.ifa_index, ifname);
++			zlog_err(
++				"%s: unable to read CARP state for %s vhid %u: %s",
++				__func__, ifname, parsed.ifaf_vhid,
++				safe_strerror(errno));
++			goto out;
++		}
++
++		/* CARP_STATES indexes INIT=0, BACKUP=1, MASTER=2. */
++		if (state != CARP_MAXSTATE &&
++		    !carp_startup_store_nonowner(&parsed))
++			goto out;
++	}
++	if (e.error != 0) {
++		zlog_err("%s: RTM_GETADDR dump failed: %s", __func__,
++			 safe_strerror(e.error));
++		goto out;
++	}
++
++	carp_startup_filter_active = true;
++	ok = true;
++	if (IS_ZEBRA_DEBUG_KERNEL)
++		zlog_debug("%s: suppressing %zu non-owner CARP addresses",
++			   __func__, carp_startup_nonowner_count);
++
++out:
++	if (state_sock >= 0)
++		close(state_sock);
++	if (snl_ready)
++		snl_free(&ss);
++	if (!ok)
++		carp_startup_filter_end();
++	return ok;
++}
++
++void
++carp_startup_filter_end(void)
++{
++	XFREE(MTYPE_TMP, carp_startup_nonowners);
++	carp_startup_nonowner_count = 0;
++	carp_startup_filter_active = false;
++}
++
++static bool
++carp_startup_address_is_nonowner(ifindex_t ifindex,
++				 const union sockunion *addr)
++{
++	struct in6_addr v6;
++	size_t i;
++
++	if (!carp_startup_filter_active)
++		return false;
++
++	for (i = 0; i < carp_startup_nonowner_count; i++) {
++		const struct carp_startup_nonowner *entry =
++			&carp_startup_nonowners[i];
++
++		if (entry->ifindex != ifindex ||
++		    entry->family != sockunion_family(addr))
++			continue;
++
++		if (entry->family == AF_INET &&
++		    entry->addr.v4.s_addr == addr->sin.sin_addr.s_addr)
++			return true;
++
++		if (entry->family != AF_INET6)
++			continue;
++
++		v6 = addr->sin6.sin6_addr;
++		if (IN6_IS_ADDR_LINKLOCAL(&v6)) {
++			v6.s6_addr[2] = 0;
++			v6.s6_addr[3] = 0;
++		}
++		if (memcmp(&entry->addr.v6, &v6, sizeof(v6)) == 0)
++			return true;
++	}
++
++	return false;
++}
++#endif /* __FreeBSD__ */
++
+ /*
+  * Historically, the BSD routing socket has aligned data following a
+  * struct sockaddr to sizeof(long), which was 4 bytes on some
+@@ -883,17 +1138,30 @@
+ 	/* Add connected address. */
+ 	switch (sockunion_family(&addr)) {
+ 	case AF_INET:
++#ifdef __FreeBSD__
++		if (ifam->ifam_type == RTM_NEWADDR &&
++		    carp_startup_address_is_nonowner(ifam->ifam_index, &addr)) {
++			if (IS_ZEBRA_DEBUG_KERNEL)
++				zlog_debug("%s: suppressing startup CARP non-owner %pSU on ifindex %u",
++					   __func__, &addr, ifam->ifam_index);
++			return 0;
++		}
++#endif
+ 		if (ifam->ifam_type == RTM_NEWADDR)
+-			connected_add_ipv4(ifp, flags, &addr.sin.sin_addr,
+-					   ip_masklen(mask.sin.sin_addr),
+-					   dest_same ? NULL : &brd.sin.sin_addr,
+-					   (isalias ? ifname : NULL),
+-					   METRIC_MAX);
++			connected_add_ipv4(
++				ifp, flags, &addr.sin.sin_addr,
++				ip_masklen(mask.sin.sin_addr),
++				CHECK_FLAG(flags, ZEBRA_IFA_PEER) && !dest_same
++					? &brd.sin.sin_addr
++					: NULL,
++				(isalias ? ifname : NULL), METRIC_MAX);
+ 		else
+-			connected_delete_ipv4(ifp, flags, &addr.sin.sin_addr,
+-					      ip_masklen(mask.sin.sin_addr),
+-					      dest_same ? NULL
+-							: &brd.sin.sin_addr);
++			connected_delete_ipv4(
++				ifp, flags, &addr.sin.sin_addr,
++				ip_masklen(mask.sin.sin_addr),
++				CHECK_FLAG(flags, ZEBRA_IFA_PEER) && !dest_same
++					? &brd.sin.sin_addr
++					: NULL);
+ 		break;
+ 	case AF_INET6:
+ 		/* Unset interface index from link-local address when IPv6 stack
+@@ -901,6 +1169,15 @@
+ 		if (IN6_IS_ADDR_LINKLOCAL(&addr.sin6.sin6_addr)) {
+ 			SET_IN6_LINKLOCAL_IFINDEX(addr.sin6.sin6_addr, 0);
+ 		}
++#ifdef __FreeBSD__
++		if (ifam->ifam_type == RTM_NEWADDR &&
++		    carp_startup_address_is_nonowner(ifam->ifam_index, &addr)) {
++			if (IS_ZEBRA_DEBUG_KERNEL)
++				zlog_debug("%s: suppressing startup CARP non-owner %pSU on ifindex %u",
++					   __func__, &addr, ifam->ifam_index);
++			return 0;
++		}
++#endif
+ 
+ 		if (ifam->ifam_type == RTM_NEWADDR)
+ 			connected_add_ipv6(ifp, flags, &addr.sin6.sin6_addr,
+@@ -1037,6 +1314,35 @@
+ 		return;
+ #endif
+ 
++#ifdef __FreeBSD__
++	/*
++	 * Neighbor-cache entries use the routing socket for compatibility but
++	 * are not routes Zebra should import.  In particular, nd6_add_ifa_lle()
++	 * emits an RTF_LLDATA host entry without a matching PF_ROUTE delete on
++	 * CARP ownership loss.
++	 */
++#ifdef RTF_LLDATA
++	if (flags & RTF_LLDATA)
++		return;
++#elif defined(RTF_LLINFO)
++	if (flags & RTF_LLINFO)
++		return;
++#endif
++
++	/*
++	 * FreeBSD emits a separate pinned/static host-route notification for a
++	 * local interface address.  The address RTM_NEWADDR/DELADDR messages
++	 * already create/remove Zebra's LOCAL route; importing this kernel copy
++	 * would duplicate ownership and can leave stale RIB state.
++	 */
++#ifdef RTF_PINNED
++	if (gate.sa.sa_family == AF_LINK &&
++	    (flags & (RTF_HOST | RTF_STATIC | RTF_PINNED)) ==
++	        (RTF_HOST | RTF_STATIC | RTF_PINNED))
++		return;
++#endif
++#endif
++
+ 	if ((rtm->rtm_type == RTM_ADD || rtm->rtm_type == RTM_CHANGE)
+ 	    && !(flags & RTF_UP))
+ 		return;

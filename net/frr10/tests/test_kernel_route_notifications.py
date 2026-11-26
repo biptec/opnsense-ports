@@ -108,6 +108,38 @@ def main() -> None:
     def change(family: str, prefix: str, gateway: str, *extra: str) -> None:
         run('route', 'change', '-'+family, prefix, gateway, *extra)
 
+    def check_interface_route(label: str, prefix: str, interface: str) -> None:
+        deadline = time.monotonic() + 5
+        current = []
+        stable_since = None
+        while time.monotonic() < deadline:
+            current = rib(prefix, 'inet')
+            paths = {
+                n.get('interfaceName', '')
+                for route in current
+                for n in route.get('nexthops', [])
+                if n.get('directlyConnected')
+            }
+            if len(current) == 1 and paths == {interface}:
+                if stable_since is None:
+                    stable_since = time.monotonic()
+                if time.monotonic() - stable_since >= 0.3:
+                    results.append({
+                        'stage': label,
+                        'prefix': prefix,
+                        'kernel_entries': 1,
+                        'interface': interface,
+                    })
+                    print(json.dumps(results[-1]), flush=True)
+                    return
+            else:
+                stable_since = None
+            time.sleep(0.1)
+        raise AssertionError(
+            f'{label}: expected one directly-connected kernel route via '
+            f'{interface}, got {current}'
+        )
+
     try:
         with (work / 'notifications.log').open('w') as notifications:
             monitor = subprocess.Popen(['route', '-n', 'monitor'],
@@ -141,6 +173,27 @@ def main() -> None:
         elif args.suite == 'linklocal':
             cases = [('inet6', '2001:db8:122::fffb/128',
                       f'fe80::2%{devices[0]}', f'fe80::2%{devices[1]}')]
+        if args.suite == 'single':
+            # A user-created interface-only static host route also carries an
+            # AF_LINK gateway, but unlike a local-address loopback route it is
+            # not RTF_PINNED.  Keep this negative control so the FreeBSD local
+            # address filter cannot grow broad enough to hide legitimate
+            # operator-managed interface routes from Zebra.
+            iface_prefix = '203.0.113.77/32'
+            run('route', 'add', '-inet', '-host', iface_prefix.split('/')[0],
+                '-iface', devices[0])
+            owned_routes.append(('inet', iface_prefix))
+            fib = run('route', '-n', 'get', iface_prefix.split('/')[0]).stdout
+            if 'PINNED' in fib or 'STATIC' not in fib or 'HOST' not in fib:
+                raise AssertionError(
+                    f'interface-route control has unexpected flags: {fib}'
+                )
+            check_interface_route(
+                'interface-only static host route remains visible',
+                iface_prefix,
+                devices[0],
+            )
+
         for family, prefix, first, second in cases:
             run('route', 'add', '-'+family, prefix, first)
             owned_routes.append((family, prefix))
