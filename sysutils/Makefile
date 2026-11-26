@@ -163,6 +163,7 @@
     SUBDIR += byobu
     SUBDIR += calamares
     SUBDIR += cardano-cli
+    SUBDIR += carp-healthd
     SUBDIR += catatonit
     SUBDIR += catfish
     SUBDIR += catsit

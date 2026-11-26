@@ -1,0 +1,5 @@
+Persistent, event-driven health controller for OPNsense CARP.
+
+The daemon performs native FreeBSD CARP state/priority control, persistent
+BPF ARP probes equivalent to arping -0, event-driven ownership observation,
+and explicitly-owned conditional fallback-route reconciliation.
