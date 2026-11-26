@@ -292,7 +292,7 @@ func (p *freeBSDPlatform) routeLoop(ctx context.Context, emit func(NativeEvent))
 			emit(NativeEvent{Kind: "resync"})
 			return
 		}
-		if n > 0 {
+		if n > 0 && pfRouteBufferNeedsAudit(buf[:n]) {
 			emit(NativeEvent{Kind: "route"})
 		}
 	}

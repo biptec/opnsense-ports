@@ -1,5 +1,6 @@
 PORTNAME=	carp-healthd
 DISTVERSION=	0.1.0
+PORTREVISION=	1
 CATEGORIES=	sysutils
 
 MAINTAINER=	ports@FreeBSD.org
