@@ -1,0 +1,5 @@
+TIMESTAMP = 1795679062
+SHA256 (golang-net-v0.55.0_GH0.tar.gz) = 38f60aa36e15d9233e9a4386f020168adaca5c829a60b7e80ab6f942dd47ffb1
+SIZE (golang-net-v0.55.0_GH0.tar.gz) = 1341991
+SHA256 (golang-sys-v0.45.0_GH0.tar.gz) = 5ffcccf93ea6dc5fc7b315e49f8cdc5ec21763ffcd97c96ba262a565101a3107
+SIZE (golang-sys-v0.45.0_GH0.tar.gz) = 1549000

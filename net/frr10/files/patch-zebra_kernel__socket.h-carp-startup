@@ -1,0 +1,13 @@
+--- zebra/kernel_socket.h.orig
++++ zebra/kernel_socket.h
+@@ -29,6 +29,10 @@
+ extern void rtm_read(struct rt_msghdr *rtm);
+ extern int ifam_read(struct ifa_msghdr *ifam);
+ extern int ifm_read(struct if_msghdr *ifm);
++#ifdef __FreeBSD__
++extern bool carp_startup_filter_begin(void);
++extern void carp_startup_filter_end(void);
++#endif
+ extern int rtm_write(int message, union sockunion *dest, union sockunion *mask,
+ 		     union sockunion *gate, union sockunion *mpls, unsigned int index,
+ 		     enum blackhole_type bh_type, int metric);
